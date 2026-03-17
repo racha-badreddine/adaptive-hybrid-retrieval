@@ -1,0 +1,16 @@
+# Core dependencies
+numpy
+pandas
+scikit-learn
+
+# Dense retrieval
+transformers
+torch
+
+# Sparse retrieval
+rank-bm25
+
+# Utilities
+jupyter
+matplotlib
+seaborn
