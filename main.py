@@ -2,6 +2,7 @@ from src.data.download_beir import download_beir_dataset
 from src.data.load_beir import load_beir_dataset
 from src.retrieval.bm25_retriever import run_bm25
 from src.retrieval.dense_retriever import run_dense_retrieval
+from src.retrieval.hybrid_static import fuse_static
 from beir.retrieval.evaluation import EvaluateRetrieval
 
 
@@ -43,6 +44,15 @@ def main():
         top_k=100,
     )
     print_metrics("Dense", qrels, results_dense)
+
+    for alpha in [0.2, 0.5, 0.8]:
+        results_hybrid = fuse_static(
+            bm25_results=results_bm25,
+            dense_results=results_dense,
+            alpha=alpha,
+            top_k=100,
+        )
+        print_metrics(f"Static Hybrid (alpha={alpha})", qrels, results_hybrid)
 
 
 if __name__ == "__main__":
