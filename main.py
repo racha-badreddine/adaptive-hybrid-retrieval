@@ -4,6 +4,7 @@ from src.retrieval.bm25_retriever import run_bm25
 from src.retrieval.dense_retriever import run_dense_retrieval
 from src.retrieval.hybrid_static import fuse_static
 from beir.retrieval.evaluation import EvaluateRetrieval
+from src.features.query_features import compute_idf_dict, extract_query_features
 
 
 def print_metrics(name, qrels, results):
@@ -53,6 +54,20 @@ def main():
             top_k=100,
         )
         print_metrics(f"Static Hybrid (alpha={alpha})", qrels, results_hybrid)
+        
+        idf_dict = compute_idf_dict(corpus)
+
+    sample_qid = list(queries.keys())[0]
+    sample_features = extract_query_features(
+        query_text=queries[sample_qid],
+        bm25_results_for_query=results_bm25[sample_qid],
+        dense_results_for_query=results_dense[sample_qid],
+        idf_dict=idf_dict,
+    )
+
+    print("\nSample Query Features")
+    print(f"Query ID: {sample_qid}")
+    print(sample_features)
 
 
 if __name__ == "__main__":
