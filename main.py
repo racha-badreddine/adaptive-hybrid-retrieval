@@ -108,7 +108,7 @@ def run_dataset_pipeline(
             "runtime_seconds": hybrid_seconds,
             "metrics": hybrid_metrics,
         }
-
+    '''
     idf_dict = compute_idf_dict(corpus)
 
     sample_qid = list(queries.keys())[0]
@@ -159,7 +159,7 @@ def run_dataset_pipeline(
         },
         "hybrid": hybrid_summaries,
     }
-    save_run_summary(dataset_name, run_summary)
+    save_run_summary(dataset_name, run_summary)'''
 
 
 def parse_args():

@@ -1,13 +1,16 @@
 from rank_bm25 import BM25Okapi
 import re
+import random
 from typing import Dict, Tuple
 import numpy as np
 
 
+# THis later needs to be replaced with a more robust tokenizer, but this is a simple start for BM25 baseline.
 def simple_tokenize(text: str):
     """Very simple tokenizer for a first BM25 baseline."""
     text = text.lower()
     return re.findall(r"\b\w+\b", text)
+
 
 
 def build_document_text(doc: Dict) -> str:
@@ -47,7 +50,9 @@ def run_bm25(
 
     query_items = list(queries.items())
     if max_queries is not None:
-        query_items = query_items[:max_queries]
+        # Use a fixed seed to ensure BM25 and Dense retrievers select the exact same queries
+        rng = random.Random(42)
+        query_items = rng.sample(query_items, min(max_queries, len(query_items)))
 
     for query_id, query_text in query_items:
         tokenized_query = simple_tokenize(query_text)

@@ -1,6 +1,7 @@
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
+import random
 from typing import Dict
 from pathlib import Path
 import hashlib
@@ -80,7 +81,9 @@ def run_dense_retrieval(
 
     query_ids = list(queries.keys())
     if max_queries is not None:
-        query_ids = query_ids[:max_queries]
+        # Use a fixed seed to ensure BM25 and Dense retrievers select the exact same queries
+        rng = random.Random(42)
+        query_ids = rng.sample(query_ids, min(max_queries, len(query_ids)))
 
     query_texts = [queries[qid] for qid in query_ids]
 
