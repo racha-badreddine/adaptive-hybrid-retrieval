@@ -2,6 +2,42 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 from typing import Dict
+from pathlib import Path
+import hashlib
+
+
+def _make_cache_path(cache_dir: str, cache_key: str) -> Path:
+    safe_key = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
+    return Path(cache_dir) / f"{safe_key}.npz"
+
+
+def _load_cached_embeddings(
+    cache_path: Path,
+    expected_doc_ids: list[str],
+) -> np.ndarray | None:
+    if not cache_path.exists():
+        return None
+
+    try:
+        with np.load(cache_path) as data:
+            cached_doc_ids = data["doc_ids"].tolist()
+            cached_embeddings = data["embeddings"]
+
+        if cached_doc_ids != expected_doc_ids:
+            return None
+
+        return cached_embeddings
+    except Exception:
+        return None
+
+
+def _save_cached_embeddings(cache_path: Path, doc_ids: list[str], embeddings: np.ndarray) -> None:
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        cache_path,
+        doc_ids=np.array(doc_ids),
+        embeddings=embeddings,
+    )
 
 
 def build_document_text(doc: Dict) -> str:
@@ -18,6 +54,9 @@ def run_dense_retrieval(
     queries: Dict,
     model_name: str = "all-MiniLM-L6-v2",
     top_k: int = 100,
+    max_queries: int | None = None,
+    cache_dir: str | None = None,
+    cache_key: str | None = None,
 ):
     """
     Run dense retrieval using Sentence-BERT embeddings.
@@ -27,6 +66,9 @@ def run_dense_retrieval(
         queries: BEIR queries dictionary
         model_name: sentence-transformer model name
         top_k: number of documents to retrieve per query
+        max_queries: optional limit on number of queries to process
+        cache_dir: optional directory for storing dense doc embedding cache
+        cache_key: optional cache identity (e.g., dataset + model)
 
     Returns:
         results: dict[query_id][doc_id] = score
@@ -37,16 +79,31 @@ def run_dense_retrieval(
     documents = [build_document_text(corpus[doc_id]) for doc_id in doc_ids]
 
     query_ids = list(queries.keys())
+    if max_queries is not None:
+        query_ids = query_ids[:max_queries]
+
     query_texts = [queries[qid] for qid in query_ids]
 
+    doc_embeddings = None
+    cache_path = None
+    if cache_dir and cache_key:
+        cache_path = _make_cache_path(cache_dir, cache_key)
+        doc_embeddings = _load_cached_embeddings(cache_path, doc_ids)
+        if doc_embeddings is not None:
+            print(f"Loaded dense doc embeddings from cache: {cache_path}")
+
     # Encode documents and queries
-    doc_embeddings = model.encode(
-        documents,
-        batch_size=32,
-        show_progress_bar=True,
-        convert_to_numpy=True,
-        normalize_embeddings=True,
-    )
+    if doc_embeddings is None:
+        doc_embeddings = model.encode(
+            documents,
+            batch_size=32,
+            show_progress_bar=True,
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
+        if cache_path is not None:
+            _save_cached_embeddings(cache_path, doc_ids, doc_embeddings)
+            print(f"Saved dense doc embeddings to cache: {cache_path}")
 
     query_embeddings = model.encode(
         query_texts,

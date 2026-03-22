@@ -11,3 +11,4 @@ results/
 .vscode/
 .idea/
 *.log
+data

@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import time
 import zipfile
 
 import requests
@@ -13,6 +14,8 @@ BEIR_DATASET_URLS = {
     "scidocs": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scidocs.zip",
     "trec-covid": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/trec-covid.zip",
 }
+
+BEIR_BASE_URL = "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets"
 
 
 def download_file(url: str, output_path: Path) -> None:
@@ -36,11 +39,10 @@ def download_beir_dataset(data_dir: str, dataset_name: str) -> Path:
     Returns:
         Path to extracted dataset directory
     """
-    if dataset_name not in BEIR_DATASET_URLS:
-        raise ValueError(
-            f"Unknown dataset '{dataset_name}'. "
-            f"Available: {list(BEIR_DATASET_URLS.keys())}"
-        )
+    dataset_url = BEIR_DATASET_URLS.get(
+        dataset_name,
+        f"{BEIR_BASE_URL}/{dataset_name}.zip",
+    )
 
     data_root = Path(data_dir)
     data_root.mkdir(parents=True, exist_ok=True)
@@ -53,14 +55,22 @@ def download_beir_dataset(data_dir: str, dataset_name: str) -> Path:
         return dataset_path
 
     print(f"Downloading {dataset_name}...")
-    download_file(BEIR_DATASET_URLS[dataset_name], zip_path)
+    download_file(dataset_url, zip_path)
 
     print(f"Extracting {zip_path}...")
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
         zip_ref.extractall(data_root)
 
     print(f"Removing zip file: {zip_path}")
-    os.remove(zip_path)
+    # Windows can briefly keep a lock after extraction; retry a few times.
+    for attempt in range(5):
+        try:
+            os.remove(zip_path)
+            break
+        except PermissionError:
+            if attempt == 4:
+                raise
+            time.sleep(0.5)
 
     print(f"Dataset ready at: {dataset_path}")
     return dataset_path
