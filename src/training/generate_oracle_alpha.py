@@ -2,6 +2,7 @@ from typing import Dict, List, Tuple
 from beir.retrieval.evaluation import EvaluateRetrieval
 import json
 from pathlib import Path
+import numpy as np
 from src.retrieval.hybrid_static import fuse_single_query
 
 
@@ -43,7 +44,8 @@ def generate_oracle_alphas(
         }
     """
     if alpha_grid is None:
-        alpha_grid = [i / 10.0 for i in range(11)]  # 0.0 to 1.0
+        # 51 values: 0.00, 0.02, 0.04, ..., 0.98, 1.00
+        alpha_grid = [round(i / 50.0, 10) for i in range(51)]
 
     oracle_data = {}
 
