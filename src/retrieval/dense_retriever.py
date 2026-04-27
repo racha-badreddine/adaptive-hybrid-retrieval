@@ -6,6 +6,17 @@ from typing import Dict
 from pathlib import Path
 import hashlib
 
+# BGE-specific query prefix for retrieval tasks.
+# Documents should NOT use this prefix; only queries.
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def get_query_prefix(model_name: str) -> str:
+    """Return the recommended query prefix for a given model name."""
+    if "bge" in model_name.lower():
+        return BGE_QUERY_PREFIX
+    return ""
+
 
 def _make_cache_path(cache_dir: str, cache_key: str) -> Path:
     safe_key = hashlib.md5(cache_key.encode("utf-8")).hexdigest()
@@ -58,6 +69,7 @@ def run_dense_retrieval(
     max_queries: int | None = None,
     cache_dir: str | None = None,
     cache_key: str | None = None,
+    query_prefix: str | None = None,
 ):
     """
     Run dense retrieval using Sentence-BERT embeddings.
@@ -70,11 +82,19 @@ def run_dense_retrieval(
         max_queries: optional limit on number of queries to process
         cache_dir: optional directory for storing dense doc embedding cache
         cache_key: optional cache identity (e.g., dataset + model)
+        query_prefix: optional prefix prepended to query texts before encoding.
+            Pass None to auto-detect from model_name (BGE models get their
+            standard retrieval prefix; all others get no prefix).
+            Pass "" to force no prefix regardless of model.
 
     Returns:
         results: dict[query_id][doc_id] = score
     """
     model = SentenceTransformer(model_name)
+
+    # Auto-detect query prefix when not explicitly overridden
+    if query_prefix is None:
+        query_prefix = get_query_prefix(model_name)
 
     doc_ids = list(corpus.keys())
     documents = [build_document_text(corpus[doc_id]) for doc_id in doc_ids]
@@ -95,7 +115,7 @@ def run_dense_retrieval(
         if doc_embeddings is not None:
             print(f"Loaded dense doc embeddings from cache: {cache_path}")
 
-    # Encode documents and queries
+    # Encode documents (no prefix for documents — applies to BGE and all models)
     if doc_embeddings is None:
         doc_embeddings = model.encode(
             documents,
@@ -108,8 +128,14 @@ def run_dense_retrieval(
             _save_cached_embeddings(cache_path, doc_ids, doc_embeddings)
             print(f"Saved dense doc embeddings to cache: {cache_path}")
 
+    # Apply query prefix only to query texts (not documents)
+    if query_prefix:
+        query_texts_to_encode = [f"{query_prefix}{t}" for t in query_texts]
+    else:
+        query_texts_to_encode = query_texts
+
     query_embeddings = model.encode(
-        query_texts,
+        query_texts_to_encode,
         batch_size=32,
         show_progress_bar=True,
         convert_to_numpy=True,
