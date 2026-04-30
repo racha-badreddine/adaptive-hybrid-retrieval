@@ -6,15 +6,30 @@ from typing import Dict
 from pathlib import Path
 import hashlib
 
-# BGE-specific query prefix for retrieval tasks.
-# Documents should NOT use this prefix; only queries.
+# BGE query prefix for retrieval tasks (documents use no prefix).
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+# E5 prefixes: both queries and documents require a prefix.
+E5_QUERY_PREFIX = "query: "
+E5_DOC_PREFIX = "passage: "
 
 
 def get_query_prefix(model_name: str) -> str:
     """Return the recommended query prefix for a given model name."""
-    if "bge" in model_name.lower():
+    name = model_name.lower()
+    if "bge" in name:
         return BGE_QUERY_PREFIX
+    if "e5" in name:
+        return E5_QUERY_PREFIX
+    return ""
+
+
+def get_doc_prefix(model_name: str) -> str:
+    """Return the recommended document prefix for a given model name.
+    Only E5 models require a document prefix; all others use no prefix.
+    """
+    if "e5" in model_name.lower():
+        return E5_DOC_PREFIX
     return ""
 
 
@@ -70,6 +85,7 @@ def run_dense_retrieval(
     cache_dir: str | None = None,
     cache_key: str | None = None,
     query_prefix: str | None = None,
+    doc_prefix: str | None = None,
 ):
     """
     Run dense retrieval using Sentence-BERT embeddings.
@@ -82,22 +98,31 @@ def run_dense_retrieval(
         max_queries: optional limit on number of queries to process
         cache_dir: optional directory for storing dense doc embedding cache
         cache_key: optional cache identity (e.g., dataset + model)
-        query_prefix: optional prefix prepended to query texts before encoding.
-            Pass None to auto-detect from model_name (BGE models get their
-            standard retrieval prefix; all others get no prefix).
-            Pass "" to force no prefix regardless of model.
+        query_prefix: prefix prepended to query texts before encoding.
+            None = auto-detect from model_name; "" = force no prefix.
+        doc_prefix: prefix prepended to document texts before encoding.
+            None = auto-detect from model_name; "" = force no prefix.
+            E5 models require "passage: "; all others use no prefix.
 
     Returns:
         results: dict[query_id][doc_id] = score
     """
     model = SentenceTransformer(model_name)
 
-    # Auto-detect query prefix when not explicitly overridden
+    # Auto-detect prefixes when not explicitly overridden
     if query_prefix is None:
         query_prefix = get_query_prefix(model_name)
+    if doc_prefix is None:
+        doc_prefix = get_doc_prefix(model_name)
 
     doc_ids = list(corpus.keys())
-    documents = [build_document_text(corpus[doc_id]) for doc_id in doc_ids]
+    raw_documents = [build_document_text(corpus[doc_id]) for doc_id in doc_ids]
+
+    # Apply document prefix before encoding (and caching)
+    if doc_prefix:
+        documents = [f"{doc_prefix}{d}" for d in raw_documents]
+    else:
+        documents = raw_documents
 
     query_ids = list(queries.keys())
     if max_queries is not None:
@@ -115,7 +140,6 @@ def run_dense_retrieval(
         if doc_embeddings is not None:
             print(f"Loaded dense doc embeddings from cache: {cache_path}")
 
-    # Encode documents (no prefix for documents — applies to BGE and all models)
     if doc_embeddings is None:
         doc_embeddings = model.encode(
             documents,

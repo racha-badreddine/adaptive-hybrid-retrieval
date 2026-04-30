@@ -22,6 +22,7 @@ from scipy import stats as scipy_stats
 
 from beir.retrieval.evaluation import EvaluateRetrieval
 
+from src.config import ALPHA_GRID
 from src.retrieval.hybrid_static import fuse_single_query, fuse_static
 from src.retrieval.rrf import reciprocal_rank_fusion
 from src.features.query_features import FEATURE_NAMES, extract_query_features, compute_idf_dict
@@ -342,10 +343,11 @@ def run_full_evaluation(
         "heuristic_per_dataset": _alpha_lookup(preds["heuristic_per_dataset"]),
     }
 
-    alpha_grid_coarse = [round(i / 10.0, 1) for i in range(1, 10)]
+    alpha_grid_coarse = ALPHA_GRID  # 21-point 0.05-step grid, same as oracle
 
     # ── Per-dataset evaluation ────────────────────────────────────────────────
     dataset_metrics: Dict[str, Dict] = {}
+    # oracle uses all dataset queries (full ceiling); other methods use informative test split
     per_query_ndcg_all: Dict[str, Dict[str, float]] = {m: {} for m in [
         "bm25", "dense", "rrf", "best_static_val", "oracle",
         *alpha_by_model.keys(),
@@ -384,23 +386,28 @@ def run_full_evaluation(
         _static_all = fuse_static(bm25_sub, dense_sub, best_val_alpha, top_k)
         static_sub = {q: _static_all[q] for q in test_qids if q in _static_all}
 
-        # Oracle: per-query best alpha from oracle data file
+        # Oracle: evaluated over ALL qrels_ev queries (global ceiling, not split-filtered).
+        # Bug fix: old code restricted oracle to the informative test split, artificially
+        # deflating oracle NDCG for strong encoders (e.g. FiQA/BGE anomaly).
         oracle_data = load_oracle_data(ds, oracle_filename=oracle_filename)
         oracle_alpha_map = {qid: d.get("best_alpha", 0.5) for qid, d in oracle_data.items()}
-        oracle_sub = fuse_for_queries(test_qids, bm25_r, dense_r, oracle_alpha_map, top_k)
+        all_ds_qids = list(qrels_ev.keys())
+        oracle_sub_all = fuse_for_queries(all_ds_qids, bm25_r, dense_r, oracle_alpha_map, top_k)
+        oracle_m = evaluate_results(qrels_ev, oracle_sub_all)
+        pq_oracle = per_query_ndcg(qrels_ev, oracle_sub_all)
+        per_query_ndcg_all["oracle"].update(pq_oracle)
 
-        # Adaptive models
+        # Adaptive models (evaluated on informative test split)
         model_subs = {
             name: fuse_for_queries(test_qids, bm25_r, dense_r, alpha_map, top_k)
             for name, alpha_map in alpha_by_model.items()
         }
 
-        all_method_results = {
+        informative_method_results = {
             "bm25":             bm25_sub,
             "dense":            dense_sub,
             "rrf":              rrf_sub,
             "best_static_val":  static_sub,
-            "oracle":           oracle_sub,
             **model_subs,
         }
 
@@ -416,10 +423,10 @@ def run_full_evaluation(
             "adaptive_mlp_medium":am.get("mlp_medium", {}).get("mae"),
         }
 
-        # Evaluate
-        ds_metrics = {}
-        rows = []
-        for method, res in all_method_results.items():
+        # Evaluate informative test split methods
+        ds_metrics = {"oracle": oracle_m}
+        rows = [{"method": "oracle", **oracle_m, "alpha_mse": None, "alpha_mae": None}]
+        for method, res in informative_method_results.items():
             res_eval = {q: res[q] for q in q_qrels if q in res}
             if not res_eval:
                 continue
@@ -512,7 +519,9 @@ def run_full_evaluation(
 
         oracle_data = load_oracle_data(held_out, oracle_filename=oracle_filename)
         oracle_alpha_map = {q: d.get("best_alpha", 0.5) for q, d in oracle_data.items()}
-        oracle_fused = fuse_for_queries(xfer_qids, bm25_r, dense_r, oracle_alpha_map, top_k)
+        # oracle over ALL qrels for the held-out dataset (not split-filtered)
+        oracle_all_qids = list(q_qrels.keys())
+        oracle_fused = fuse_for_queries(oracle_all_qids, bm25_r, dense_r, oracle_alpha_map, top_k)
         oracle_m = evaluate_results(q_qrels, oracle_fused)
 
         delta = adapt_m["NDCG@10"] - static_m["NDCG@10"]

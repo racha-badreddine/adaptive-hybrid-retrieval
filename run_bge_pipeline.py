@@ -33,6 +33,7 @@ from pathlib import Path
 
 import numpy as np
 
+from src.config import ALPHA_GRID
 from src.data.download_beir import download_beir_dataset
 from src.data.load_beir import load_beir_dataset
 from src.retrieval.bm25_retriever import run_bm25
@@ -65,8 +66,7 @@ RESULTS_DIR = Path("results")
 MODELS_DIR = Path("models")
 BGE_MODEL = "BAAI/bge-base-en-v1.5"
 BGE_CACHE_DIR = "results/cache/dense_bge"
-ALPHA_GRID_FINE = [round(i / 50.0, 10) for i in range(51)]   # 0.00..1.00 step 0.02
-ALPHA_GRID_9 = [round(i / 10.0, 1) for i in range(1, 10)]    # 0.1..0.9
+# Both oracle and static-best use the same 21-point 0.05-step grid (from src/config.py)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -153,14 +153,14 @@ def update_run_summary(
     summary["dense_bge"] = bge_m
     print(f"  dense_bge NDCG@10={bge_m['NDCG@10']:.4f}")
 
-    # ── Static hybrid with BGE (9 alpha values) ───────────────────────────
+    # ── Static hybrid with BGE (21-point 0.05-step grid) ─────────────────
     bm25_sub = {q: bm25_results[q] for q in qrels_ev}
     best_bge_ndcg, best_bge_alpha = -1.0, 0.5
-    for alpha in ALPHA_GRID_9:
+    for alpha in ALPHA_GRID:
         fused = fuse_static(bm25_sub, {q: bge_results.get(q, {}) for q in qrels_ev},
                             alpha=alpha, top_k=top_k)
         m = evaluate_results(qrels_ev, fused)
-        key = f"hybrid_bge_alpha_{alpha:.1f}"
+        key = f"hybrid_bge_alpha_{alpha:.2f}"
         summary[key] = m
         if m["NDCG@10"] > best_bge_ndcg:
             best_bge_ndcg = m["NDCG@10"]
@@ -168,7 +168,7 @@ def update_run_summary(
 
     summary["best_static_hybrid_bge"] = {
         "alpha": best_bge_alpha,
-        **{k: v for k, v in summary[f"hybrid_bge_alpha_{best_bge_alpha:.1f}"].items()},
+        **{k: v for k, v in summary[f"hybrid_bge_alpha_{best_bge_alpha:.2f}"].items()},
     }
     print(f"  best_static_hybrid_bge: alpha={best_bge_alpha}  NDCG@10={best_bge_ndcg:.4f}")
 
@@ -188,37 +188,39 @@ def update_run_summary(
 
 # ── Step 4: Oracle alpha with BGE ────────────────────────────────────────────
 
-def generate_bge_oracle(dataset_name, bm25_results, bge_results, qrels, top_k):
-    """Generate oracle_alpha_bge.json. Returns oracle_data dict."""
-    print(f"  Running oracle grid search (51 alpha values, {len(qrels)} queries)...")
+def generate_bge_oracle(dataset_name, bm25_results, bge_results, qrels, top_k,
+                        out_filename="oracle_alpha_bge.json"):
+    """Generate oracle JSON for BGE. Uses ALPHA_GRID (21-point, 0.05 step) over ALL queries."""
+    print(f"  Running oracle grid search ({len(ALPHA_GRID)} alpha values, {len(qrels)} queries)...")
     t0 = time.perf_counter()
     oracle_data = generate_oracle_alphas(
         qrels=qrels,
         bm25_results=bm25_results,
         dense_results=bge_results,
-        alpha_grid=ALPHA_GRID_FINE,
+        alpha_grid=ALPHA_GRID,
         top_k=top_k,
     )
     elapsed = time.perf_counter() - t0
 
-    out_path = RESULTS_DIR / dataset_name / "oracle_alpha_bge.json"
+    out_path = RESULTS_DIR / dataset_name / out_filename
     save_oracle_data(oracle_data, out_path)
 
+    # Report stats over ALL queries (not just informative subset)
+    all_alphas = [d["best_alpha"] for d in oracle_data.values()]
+    all_ndcgs  = [d["best_ndcg"]  for d in oracle_data.values()]
     n_informative = sum(1 for d in oracle_data.values() if d.get("is_informative"))
-    best_alphas = [d["best_alpha"] for d in oracle_data.values() if d.get("is_informative")]
-    best_ndcgs  = [d["best_ndcg"]  for d in oracle_data.values() if d.get("is_informative")]
-    mean_alpha  = float(np.mean(best_alphas)) if best_alphas else 0.0
-    std_alpha   = float(np.std(best_alphas))  if best_alphas else 0.0
-    mean_ndcg   = float(np.mean(best_ndcgs))  if best_ndcgs  else 0.0
+    mean_alpha = float(np.mean(all_alphas)) if all_alphas else 0.0
+    std_alpha  = float(np.std(all_alphas))  if all_alphas else 0.0
+    mean_ndcg  = float(np.mean(all_ndcgs))  if all_ndcgs  else 0.0
 
     print(f"  Oracle (BGE):  mean_alpha={mean_alpha:.3f} std={std_alpha:.3f}  "
-          f"NDCG@10={mean_ndcg:.4f}  informative={n_informative}  "
+          f"NDCG@10={mean_ndcg:.4f}  informative={n_informative}/{len(oracle_data)}  "
           f"({elapsed:.1f}s)")
     return oracle_data
 
 
 def compare_oracles(dataset_name, oracle_bge):
-    """Print comparison between MiniLM and BGE oracle stats."""
+    """Print MiniLM vs BGE oracle comparison over ALL queries (not informative-only)."""
     minilm_path = RESULTS_DIR / dataset_name / "oracle_alpha.json"
     if not minilm_path.exists():
         return
@@ -227,22 +229,22 @@ def compare_oracles(dataset_name, oracle_bge):
         oracle_ml = json.load(f)
 
     def _stats(data):
-        inf = [d for d in data.values() if d.get("is_informative")]
-        alphas = [d["best_alpha"] for d in inf]
-        ndcgs  = [d["best_ndcg"]  for d in inf]
+        alphas = [d["best_alpha"] for d in data.values()]
+        ndcgs  = [d["best_ndcg"]  for d in data.values()]
+        n_inf  = sum(1 for d in data.values() if d.get("is_informative"))
         return (float(np.mean(alphas)) if alphas else 0.0,
                 float(np.std(alphas))  if alphas else 0.0,
                 float(np.mean(ndcgs))  if ndcgs  else 0.0,
-                len(inf))
+                n_inf, len(data))
 
-    ml_ma, ml_sa, ml_nd, ml_ni = _stats(oracle_ml)
-    bg_ma, bg_sa, bg_nd, bg_ni = _stats(oracle_bge)
+    ml_ma, ml_sa, ml_nd, ml_ni, ml_n = _stats(oracle_ml)
+    bg_ma, bg_sa, bg_nd, bg_ni, bg_n = _stats(oracle_bge)
 
-    print(f"  Oracle comparison for {dataset_name}:")
+    print(f"  Oracle comparison for {dataset_name} (all queries):")
     print(f"    MiniLM: mean_alpha={ml_ma:.3f} std={ml_sa:.3f}  "
-          f"NDCG@10={ml_nd:.4f}  informative={ml_ni}")
+          f"NDCG@10={ml_nd:.4f}  informative={ml_ni}/{ml_n}")
     print(f"    BGE:    mean_alpha={bg_ma:.3f} std={bg_sa:.3f}  "
-          f"NDCG@10={bg_nd:.4f}  informative={bg_ni}")
+          f"NDCG@10={bg_nd:.4f}  informative={bg_ni}/{bg_n}")
 
 
 # ── Step 5: Feature extraction with BGE ──────────────────────────────────────
@@ -688,13 +690,14 @@ def main():
         print(f"\n[Step 4] Generating oracle_alpha_bge.json for {ds}...")
         oracle_bge = generate_bge_oracle(ds, bm25_results, bge_results, qrels_ev, args.top_k)
 
-        # Collect oracle stats for analysis
-        inf_bg = [d for d in oracle_bge.values() if d.get("is_informative")]
+        # Collect oracle stats over ALL queries (not informative-only)
+        all_bg = list(oracle_bge.values())
         bge_oracle_stats[ds] = {
-            "mean_alpha": float(np.mean([d["best_alpha"] for d in inf_bg])) if inf_bg else 0.0,
-            "std_alpha":  float(np.std([d["best_alpha"]  for d in inf_bg])) if inf_bg else 0.0,
-            "mean_ndcg":  float(np.mean([d["best_ndcg"]  for d in inf_bg])) if inf_bg else 0.0,
-            "n_informative": len(inf_bg),
+            "mean_alpha": float(np.mean([d["best_alpha"] for d in all_bg])) if all_bg else 0.0,
+            "std_alpha":  float(np.std([d["best_alpha"]  for d in all_bg])) if all_bg else 0.0,
+            "mean_ndcg":  float(np.mean([d["best_ndcg"]  for d in all_bg])) if all_bg else 0.0,
+            "n_informative": sum(1 for d in all_bg if d.get("is_informative")),
+            "n_total": len(all_bg),
         }
 
         # MiniLM oracle stats for comparison
@@ -702,10 +705,11 @@ def main():
         if ml_path.exists():
             with open(ml_path, encoding="utf-8") as f:
                 oracle_ml = json.load(f)
-            inf_ml = [d for d in oracle_ml.values() if d.get("is_informative")]
+            all_ml = list(oracle_ml.values())
             ml_oracle_stats[ds] = {
-                "mean_alpha": float(np.mean([d["best_alpha"] for d in inf_ml])) if inf_ml else 0.0,
-                "n_informative": len(inf_ml),
+                "mean_alpha": float(np.mean([d["best_alpha"] for d in all_ml])) if all_ml else 0.0,
+                "n_informative": sum(1 for d in all_ml if d.get("is_informative")),
+                "n_total": len(all_ml),
             }
         else:
             ml_oracle_stats[ds] = {}

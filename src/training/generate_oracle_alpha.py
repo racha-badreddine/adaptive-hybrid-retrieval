@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import numpy as np
 from src.retrieval.hybrid_static import fuse_single_query
+from src.config import ALPHA_GRID as _DEFAULT_ALPHA_GRID
 
 
 def evaluate_single_query_ndcg(
@@ -44,8 +45,8 @@ def generate_oracle_alphas(
         }
     """
     if alpha_grid is None:
-        # 51 values: 0.00, 0.02, 0.04, ..., 0.98, 1.00
-        alpha_grid = [round(i / 50.0, 10) for i in range(51)]
+        # 21 values: 0.00, 0.05, 0.10, ..., 1.00
+        alpha_grid = _DEFAULT_ALPHA_GRID
 
     oracle_data = {}
 
@@ -79,8 +80,8 @@ def generate_oracle_alphas(
             if score == best_ndcg
         ]
 
-        # choose the middle alpha among ties instead of always the first
-        best_alpha = best_alphas[len(best_alphas) // 2]
+        # parsimony: among tied alphas, prefer the one closest to 0.5 (neutral blend)
+        best_alpha = min(best_alphas, key=lambda a: abs(a - 0.5))
 
         score_values = list(alpha_scores.values())
         is_informative = len(set(score_values)) > 1 and best_ndcg > 0.0
