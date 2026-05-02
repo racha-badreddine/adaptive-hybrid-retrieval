@@ -1,14 +1,39 @@
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
+*.pyd
+
+# ── Virtual environment ───────────────────────────────────────────────────────
 .venv/
+venv/
 env/
+
+# ── Jupyter ───────────────────────────────────────────────────────────────────
 .ipynb_checkpoints/
-data/raw/
-data/processed/
-data/indices/
-results/
-.DS_Store
+
+# ── IDE / OS ──────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+.DS_Store
+Thumbs.db
+
+# ── BEIR datasets (downloaded fresh by scripts; too large for git) ────────────
+data/
+
+# ── Generated results (re-run pipeline to reproduce) ─────────────────────────
+results/
+
+# ── Trained model checkpoints ────────────────────────────────────────────────
+models/
+
+# ── Large binary / archive files ─────────────────────────────────────────────
+*.npz
+*.pkl
+*.zip
+*.tar.gz
+*.gz
+*.npy
+
+# ── Log files ────────────────────────────────────────────────────────────────
 *.log
-data
